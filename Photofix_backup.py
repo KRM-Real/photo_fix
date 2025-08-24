@@ -18,7 +18,7 @@ except Exception:
     mp = None
     _HAVE_MP = False
 
-# ---- Try to import HuggingFace models; fall back gracefully if unavailable ----
+# ---- Try to import HuggingFace models; fall gracefully if unavailable ----
 try:
     from transformers import pipeline
     from diffusers import StableDiffusionInpaintPipeline
@@ -38,16 +38,16 @@ PRESETS = {
     "HD Portrait (720x1280)": (720, 1280),
 }
 
-# Background colors preset with professional white as default
+# Background colors preset
 BG_COLORS = {
     "White": "#FFFFFF",
-    "Light Gray": "#F8F9FA", 
-    "Blue": "#E3F2FD",
-    "Navy": "#1565C0",
-    "Black": "#000000",
-    "Red": "#FFEBEE",
-    "Green": "#E8F5E8",
-    "Cream": "#FFF8E1",
+    "Black": "#000000", 
+    "Blue": "#0066CC",
+    "Red": "#CC0000",
+    "Green": "#00CC66",
+    "Gray": "#808080",
+    "Navy": "#000080",
+    "Cream": "#F5F5DC",
 }
 
 @dataclass
@@ -111,103 +111,43 @@ def smart_crop(img: Image.Image, target_size: Tuple[int,int]) -> Image.Image:
     return img.crop((x1, y1, x2, y2)).resize((Wt, Ht), Image.LANCZOS)
 
 def remove_bg(img: Image.Image, model_name: str = 'u2net') -> Image.Image:
-    """Enhanced background removal using rembg with better quality models and error handling"""
-    if img is None:
-        return None
+    """Remove background using rembg with better quality models"""
+    # Convert to RGB if needed for better processing
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
     
+    # Save to bytes
+    b = io.BytesIO()
+    img.save(b, format="PNG", quality=95)
+    
+    # Use rembg with specified model for better quality - fix API usage
     try:
-        # Convert to RGB if needed for better processing
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        
-        # Save to bytes with high quality
-        b = io.BytesIO()
-        img.save(b, format="PNG", quality=95, optimize=True)
-        b.seek(0)
-        
-        # Use rembg with specified model for better quality
         from rembg import remove, new_session
-        
-        # Try to create session with the specified model
-        try:
-            session = new_session(model_name)
-            cut = remove(b.getvalue(), session=session)
-        except Exception as e:
-            print(f"Failed to use model {model_name}, falling back to default: {e}")
-            # Fallback to basic remove if specific model fails
-            cut = remove(b.getvalue())
-        
-        # Convert result to PIL Image
-        result = Image.open(io.BytesIO(cut)).convert("RGBA")
-        
-        # Post-process for better quality
-        # Apply slight smoothing to reduce jagged edges
-        result = result.filter(ImageFilter.GaussianBlur(radius=0.5))
-        
-        return result
-        
-    except Exception as e:
-        print(f"Background removal failed: {e}")
-        # Return original image with white background as fallback
-        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        return Image.alpha_composite(bg, img.convert("RGBA"))
+        session = new_session(model_name)
+        cut = remove(b.getvalue(), session=session)
+    except:
+        # Fallback to basic remove if session fails
+        cut = remove(b.getvalue())
+    
+    result = Image.open(io.BytesIO(cut)).convert("RGBA")
+    
+    # Ensure high quality output
+    return result
 
 def remove_bg_only(img: Image.Image, model_quality: str = "Standard") -> Image.Image:
-    """Enhanced background removal without cropping - supports multiple quality levels"""
+    """Remove background without cropping - just like remove.bg"""
     if img is None:
         return None
     
-    # Enhanced model mapping with better models
+    # Map quality to rembg models
     model_map = {
         "Fast": "u2net",
-        "Standard": "u2net_human_seg", 
-        "High Quality": "u2netp",
-        "Portrait": "silueta",
-        "Product": "isnet-general-use"
+        "Standard": "u2net", 
+        "High Quality": "u2net_human_seg",
+        "Portrait": "silueta"
     }
     
-    model = model_map.get(model_quality, "u2net_human_seg")
-    return remove_bg(img, model)
-
-def remove_bg_with_postprocess(img: Image.Image, model_quality: str = "Standard", enhance_edges: bool = True) -> Image.Image:
-    """Advanced background removal with post-processing for better quality"""
-    if img is None:
-        return None
-    
-    # First pass: Remove background
-    result = remove_bg_only(img, model_quality)
-    
-    if enhance_edges and result is not None:
-        # Enhance edges for cleaner cutout
-        try:
-            import cv2
-            import numpy as np
-            
-            # Convert to numpy array
-            img_array = np.array(result)
-            
-            if len(img_array.shape) == 4:  # RGBA
-                # Extract alpha channel
-                alpha = img_array[:, :, 3]
-                
-                # Apply morphological operations to clean up the mask
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                alpha = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel)
-                alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, kernel)
-                
-                # Apply Gaussian blur for smoother edges
-                alpha = cv2.GaussianBlur(alpha, (3, 3), 0)
-                
-                # Update alpha channel
-                img_array[:, :, 3] = alpha
-                
-                # Convert back to PIL
-                result = Image.fromarray(img_array, 'RGBA')
-                
-        except Exception as e:
-            print(f"Edge enhancement failed, using original result: {e}")
-    
-    return result
+    model = model_map.get(model_quality, "u2net")
     return remove_bg(img, model)
 
 def remove_blemishes_basic(img: Image.Image, intensity: float = 0.5) -> Image.Image:
@@ -303,51 +243,51 @@ def do_cutout(img: Image.Image, size_label: str, crop_enabled: bool = True):
     else:
         return remove_bg(img)
 
-def smart_background_removal(img: Image.Image, quality: str, enhance_edges: bool, crop_to_size: bool, size_label: str):
-    """Enhanced smart background removal with quality control and edge enhancement"""
+def smart_background_removal(img: Image.Image, quality: str, crop_to_size: bool, size_label: str):
+    """Smart background removal with quality control"""
     if img is None:
         return None
     
     if crop_to_size:
         target = PRESETS[size_label]
         cropped = smart_crop(img, target)
-        return remove_bg_with_postprocess(cropped, quality, enhance_edges)
+        return remove_bg_only(cropped, quality)
     else:
-        return remove_bg_with_postprocess(img, quality, enhance_edges)
+        return remove_bg_only(img, quality)
 
 def solid_background(img: Image.Image, bg_color: str, size_label: str, crop_enabled: bool = True):
-    """Add solid color background with optional cropping using enhanced background removal"""
+    """Add solid color background with optional cropping"""
     if img is None:
         return None
     
     if crop_enabled:
         target = PRESETS[size_label]
         cropped = smart_crop(img, target)
-        fg = remove_bg_with_postprocess(cropped, "Standard", True)
+        fg = remove_bg(cropped)
         bg = Image.new("RGBA", target, bg_color)
         out = Image.alpha_composite(bg, fg).convert("RGB")
         return out
     else:
         # Use original image size
-        fg = remove_bg_with_postprocess(img, "Standard", True)
+        fg = remove_bg(img)
         target = img.size
         bg = Image.new("RGBA", target, bg_color)
         out = Image.alpha_composite(bg, fg).convert("RGB")
         return out
 
 def gradient_background(img: Image.Image, color1: str, color2: str, size_label: str, crop_enabled: bool = True):
-    """Add gradient background with optional cropping using enhanced background removal"""
+    """Add gradient background with optional cropping"""
     if img is None:
         return None
     
     if crop_enabled:
         target = PRESETS[size_label]
         cropped = smart_crop(img, target)
-        fg = remove_bg_with_postprocess(cropped, "Standard", True)
+        fg = remove_bg(cropped)
     else:
         target = img.size
         cropped = img
-        fg = remove_bg_with_postprocess(img, "Standard", True)
+        fg = remove_bg(img)
     
     # Create gradient background
     w, h = target
@@ -427,382 +367,112 @@ def professional_edit(img: Image.Image, size_label: str, bg_color: str,
     
     return final
 
-# Modern, clean CSS for professional UI/UX
+# Custom CSS for consistent white background and professional styling
 custom_css = """
-/* Base styles for clean, modern look */
-* {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif !important;
-}
-
-/* Main container */
+/* Main app styling with consistent white background */
 .gradio-container {
-    max-width: 1400px !important;
-    margin: 0 auto !important;
     background: #ffffff !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
-/* App background - pure white */
-body, .main, .app {
+/* Header styling */
+.main-header {
     background: #ffffff !important;
-    color: #1a1a1a !important;
+    padding: 24px !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    margin-bottom: 24px !important;
 }
 
-/* Header section with gradient */
-.header-modern {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-    color: white !important;
-    padding: 2.5rem 2rem !important;
-    margin: -2rem -2rem 2rem -2rem !important;
-    border-radius: 0 0 1.5rem 1.5rem !important;
-    text-align: center !important;
-}
-
-.header-title {
-    font-size: 2.5rem !important;
-    font-weight: 800 !important;
-    margin: 0 0 0.5rem 0 !important;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
-}
-
-.header-subtitle {
-    font-size: 1.1rem !important;
-    opacity: 0.9 !important;
-    margin: 0 0 2rem 0 !important;
-}
-
-.feature-grid {
-    display: grid !important;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)) !important;
-    gap: 1rem !important;
-    margin-top: 2rem !important;
-}
-
-.feature-card {
-    background: rgba(255,255,255,0.15) !important;
-    backdrop-filter: blur(10px) !important;
-    border: 1px solid rgba(255,255,255,0.2) !important;
-    border-radius: 1rem !important;
-    padding: 1.5rem !important;
-    text-align: center !important;
-    transition: transform 0.3s ease !important;
-}
-
-.feature-card:hover {
-    transform: translateY(-2px) !important;
-    background: rgba(255,255,255,0.25) !important;
-}
-
-/* Tab styling */
+/* Tab styling with white background */
 .tab-nav {
-    background: #f8fafc !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 1rem !important;
-    padding: 0.5rem !important;
-    margin: 2rem 0 !important;
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 12px !important;
+    margin-bottom: 24px !important;
 }
 
-.tab-item {
-    background: transparent !important;
-    border: none !important;
-    border-radius: 0.75rem !important;
-    padding: 1rem 2rem !important;
-    font-weight: 600 !important;
-    color: #64748b !important;
-    transition: all 0.3s ease !important;
+/* Card styling */
+.card {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 12px !important;
+    padding: 24px !important;
+    margin-bottom: 16px !important;
 }
 
-.tab-item.selected {
-    background: #667eea !important;
+/* Button styling */
+.primary-btn {
+    background: #8b5cf6 !important;
     color: white !important;
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
-}
-
-/* Section headers */
-.section-header {
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%) !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 1rem !important;
-    padding: 2rem !important;
-    margin-bottom: 2rem !important;
-    text-align: center !important;
-}
-
-.section-title {
-    font-size: 1.5rem !important;
-    font-weight: 700 !important;
-    color: #1e293b !important;
-    margin: 0 0 0.5rem 0 !important;
-}
-
-.section-description {
-    color: #64748b !important;
-    font-size: 1rem !important;
-    margin: 0 !important;
-}
-
-/* Card containers */
-.content-card {
-    background: #ffffff !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 1.25rem !important;
-    padding: 2rem !important;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
-    margin-bottom: 1.5rem !important;
-}
-
-/* Upload areas */
-.upload-zone {
-    background: linear-gradient(135deg, #fafbfb 0%, #f4f6f8 100%) !important;
-    border: 2px dashed #cbd5e1 !important;
-    border-radius: 1rem !important;
-    padding: 3rem 2rem !important;
-    text-align: center !important;
-    transition: all 0.3s ease !important;
-    cursor: pointer !important;
-}
-
-.upload-zone:hover {
-    border-color: #667eea !important;
-    background: linear-gradient(135deg, #f8faff 0%, #f0f4ff 100%) !important;
-    transform: translateY(-2px) !important;
-}
-
-.upload-icon {
-    font-size: 3rem !important;
-    color: #94a3b8 !important;
-    margin-bottom: 1rem !important;
-}
-
-.upload-text {
-    font-size: 1.1rem !important;
-    font-weight: 600 !important;
-    color: #475569 !important;
-    margin-bottom: 0.5rem !important;
-}
-
-.upload-hint {
-    color: #64748b !important;
-    font-size: 0.9rem !important;
-}
-
-/* Buttons */
-.btn-primary {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
     border: none !important;
-    color: white !important;
-    border-radius: 0.75rem !important;
-    padding: 0.875rem 2rem !important;
+    border-radius: 8px !important;
     font-weight: 600 !important;
-    font-size: 1rem !important;
-    transition: all 0.3s ease !important;
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
 }
 
-.btn-primary:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 8px 20px rgba(102, 126, 234, 0.6) !important;
-}
-
-.btn-secondary {
+.secondary-btn {
     background: #ffffff !important;
-    border: 1px solid #e2e8f0 !important;
-    color: #475569 !important;
-    border-radius: 0.75rem !important;
-    padding: 0.875rem 2rem !important;
+    color: #374151 !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
     font-weight: 600 !important;
-    font-size: 1rem !important;
-    transition: all 0.3s ease !important;
 }
 
-.btn-secondary:hover {
-    background: #f8fafc !important;
-    border-color: #667eea !important;
-    color: #667eea !important;
-    transform: translateY(-1px) !important;
-}
-
-/* Form controls */
-.form-control {
-    border: 1px solid #d1d5db !important;
-    border-radius: 0.75rem !important;
-    padding: 0.75rem 1rem !important;
-    font-size: 1rem !important;
+/* Upload area styling */
+.upload-area {
     background: #ffffff !important;
-    transition: all 0.3s ease !important;
+    border: 2px dashed #d1d5db !important;
+    border-radius: 12px !important;
+    padding: 40px !important;
 }
 
-.form-control:focus {
-    border-color: #667eea !important;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
-    outline: none !important;
+/* Result image styling */
+.result-image {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 12px !important;
 }
 
 /* Accordion styling */
 .accordion {
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 0.75rem !important;
-    overflow: hidden !important;
-    margin: 1rem 0 !important;
     background: #ffffff !important;
-}
-
-.accordion-header {
-    background: #f8fafc !important;
-    padding: 1.25rem !important;
-    font-weight: 600 !important;
-    color: #374151 !important;
-    border-bottom: 1px solid #e2e8f0 !important;
-    cursor: pointer !important;
-}
-
-.accordion-content {
-    padding: 1.5rem !important;
-    background: #ffffff !important;
-}
-
-/* Image containers */
-.image-preview {
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 1rem !important;
-    overflow: hidden !important;
-    background: #ffffff !important;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05) !important;
-}
-
-/* Labels and text */
-label {
-    font-weight: 600 !important;
-    color: #374151 !important;
-    font-size: 0.95rem !important;
-    margin-bottom: 0.5rem !important;
-}
-
-.help-text {
-    color: #64748b !important;
-    font-size: 0.875rem !important;
-    margin-top: 0.25rem !important;
-}
-
-/* Quick action cards */
-.quick-action {
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%) !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 1rem !important;
-    padding: 1.5rem !important;
-    text-align: center !important;
-    transition: all 0.3s ease !important;
-    cursor: pointer !important;
-}
-
-.quick-action:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1) !important;
-    border-color: #667eea !important;
-}
-
-/* Loading states */
-.loading {
-    opacity: 0.7 !important;
-    pointer-events: none !important;
-}
-
-/* Mobile responsiveness */
-@media (max-width: 768px) {
-    .header-modern {
-        padding: 2rem 1rem !important;
-    }
-    
-    .header-title {
-        font-size: 2rem !important;
-    }
-    
-    .feature-grid {
-        grid-template-columns: 1fr !important;
-    }
-    
-    .content-card {
-        padding: 1.5rem !important;
-    }
-}
-
-/* Animation for smooth interactions */
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.fade-in {
-    animation: fadeIn 0.5s ease-out !important;
-}
-
-/* Progress indicators */
-.progress {
-    background: #f1f5f9 !important;
-    border-radius: 0.5rem !important;
-    height: 0.5rem !important;
-    overflow: hidden !important;
-}
-
-.progress-bar {
-    background: linear-gradient(90deg, #667eea, #764ba2) !important;
-    border-radius: 0.5rem !important;
-    transition: width 0.3s ease !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
 }
 """
 
-# --- Clean, Modern UI with Professional Design ---
+# --- Enhanced UI with User Control ---
 with gr.Blocks(title="PhotoFix - Professional Photo Editor", css=custom_css, theme=gr.themes.Soft()) as demo:
-    # Modern header with gradient background
     gr.HTML("""
-    <div class="header-modern">
-        <h1 class="header-title">📸 PhotoFix</h1>
-        <p class="header-subtitle">Professional Photo Editor with AI-Powered Tools</p>
-        <div class="feature-grid">
-            <div class="feature-card">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🎯</div>
-                <div style="font-weight: 600;">Background Removal</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Like remove.bg quality</div>
-            </div>
-            <div class="feature-card">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🎨</div>
-                <div style="font-weight: 600;">Custom Backgrounds</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Professional colors</div>
-            </div>
-            <div class="feature-card">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">✨</div>
-                <div style="font-weight: 600;">Enhancement Tools</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Blemish removal & more</div>
-            </div>
-            <div class="feature-card">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">👔</div>
-                <div style="font-weight: 600;">Formal Attire</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">AI clothing changes</div>
-            </div>
+    <div class="main-header">
+        <h1 style="font-size: 32px; font-weight: bold; color: #1f2937; margin: 0;">📸 PhotoFix</h1>
+        <p style="font-size: 16px; color: #6b7280; margin-top: 8px;">Professional Photo Editor - Choose exactly what you need!</p>
+        <div style="display: flex; gap: 24px; margin-top: 16px; font-size: 14px; color: #374151;">
+            <span>🎯 <strong>Remove Background</strong> - Like remove.bg</span>
+            <span>🎨 <strong>Custom Backgrounds</strong> - Professional colors</span>
+            <span>✨ <strong>Optional Enhancement</strong> - Only when needed</span>
+            <span>👔 <strong>Formal Attire</strong> - Professional overlays</span>
         </div>
     </div>
     """)
-
-    with gr.Tab("🎯 Background Removal"):
+    
+    with gr.Tab("🎯 Background Removal", elem_classes="card"):
+        gr.HTML("""
+        <div style="background: #ffffff; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+            <h3 style="color: #1f2937; margin: 0; font-size: 18px;">Remove background without any automatic cropping</h3>
+            <p style="color: #6b7280; margin-top: 4px; font-size: 14px;">Works just like remove.bg - keeps your original image proportions</p>
+        </div>
+        """)
+        
         with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("## 🎯 Remove Background\nRemove background without any automatic cropping - just like remove.bg!", elem_classes="content-card")
+            with gr.Column(elem_classes="card"):
+                bg_img = gr.Image(type="pil", label="📤 Upload Your Photo", elem_classes="upload-area")
                 
-                bg_img = gr.Image(type="pil", label="📤 Upload Your Photo")
-                
-                with gr.Accordion("⚙️ Enhanced Background Removal Settings", open=True):
+                with gr.Accordion("⚙️ Background Removal Settings", open=True, elem_classes="accordion"):
                     bg_quality = gr.Dropdown(
-                        choices=["Fast", "Standard", "High Quality", "Portrait", "Product"],
+                        choices=["Fast", "Standard", "High Quality", "Portrait"],
                         value="Standard",
-                        label="🎯 Removal Quality",
-                        info="Standard: Best for people | Product: Best for objects | High Quality: Slower but better"
+                        label="🎯 Removal Quality"
                     )
-                    
-                    enhance_edges = gr.Checkbox(
-                        value=True,
-                        label="✨ Enhance edges (smoother cutouts)",
-                        info="Applies post-processing for cleaner edges"
-                    )
-                    
                     crop_bg = gr.Checkbox(
                         value=False,
                         label="📐 Crop to specific size (off = keep original size)"
@@ -814,10 +484,10 @@ with gr.Blocks(title="PhotoFix - Professional Photo Editor", css=custom_css, the
                         visible=False
                     )
                 
-                btn_remove_bg = gr.Button("🎯 Remove Background", variant="primary", size="lg")
+                btn_remove_bg = gr.Button("🎯 Remove Background", variant="primary", size="lg", elem_classes="primary-btn")
             
-            with gr.Column(scale=1):
-                out_bg_removed = gr.Image(type="pil", label="✨ Background Removed")
+            with gr.Column(elem_classes="card"):
+                out_bg_removed = gr.Image(type="pil", label="✨ Background Removed", elem_classes="result-image")
         
         # Show/hide crop size based on checkbox
         crop_bg.change(
@@ -826,12 +496,17 @@ with gr.Blocks(title="PhotoFix - Professional Photo Editor", css=custom_css, the
             outputs=bg_size
         )
     
-    with gr.Tab("🎨 Background Colors"):
-        gr.Markdown("### Add solid colors or gradients to your photos")
+    with gr.Tab("🎨 Background Colors", elem_classes="card"):
+        gr.HTML("""
+        <div style="background: #ffffff; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+            <h3 style="color: #1f2937; margin: 0; font-size: 18px;">Add professional background colors</h3>
+            <p style="color: #6b7280; margin-top: 4px; font-size: 14px;">Choose from preset colors or create custom gradients</p>
+        </div>
+        """)
         
         with gr.Row():
-            with gr.Column():
-                color_img = gr.Image(type="pil", label="📤 Upload Your Photo")
+            with gr.Column(elem_classes="card"):
+                color_img = gr.Image(type="pil", label="📤 Upload Your Photo", elem_classes="upload-area")
                 
                 with gr.Accordion("🎨 Background Options", open=True):
                     bg_type = gr.Radio(
@@ -973,17 +648,17 @@ with gr.Blocks(title="PhotoFix - Professional Photo Editor", css=custom_css, the
         
         def make_social_ready(img):
             if img is None: return None
-            # Social media: enhanced background removal, keep original size
-            return remove_bg_with_postprocess(img, "High Quality", True)
+            # Social media: just remove background, keep original size
+            return remove_bg_only(img, "Standard")
     
     # Event handlers
     def get_bg_color(preset_choice, custom_color):
         return BG_COLORS.get(preset_choice, custom_color)
     
-    # Enhanced background removal with edge enhancement
+    # Background removal
     btn_remove_bg.click(
         smart_background_removal,
-        inputs=[bg_img, bg_quality, enhance_edges, crop_bg, bg_size],
+        inputs=[bg_img, bg_quality, crop_bg, bg_size],
         outputs=out_bg_removed
     )
     
