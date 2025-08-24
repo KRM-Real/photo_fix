@@ -94,6 +94,21 @@ export async function processImage(image: File) {
       )
     ).data;
 
+    // Clean up mask data to reduce artifacts
+    const cleanedMaskData = new Uint8Array(maskData.length);
+    for (let i = 0; i < maskData.length; i++) {
+      const value = maskData[i];
+      // Apply threshold to reduce noise and artifacts
+      if (value < 50) {
+        cleanedMaskData[i] = 0; // Fully transparent
+      } else if (value > 200) {
+        cleanedMaskData[i] = 255; // Fully opaque
+      } else {
+        // Smooth transition area - reduce noise
+        cleanedMaskData[i] = value > 128 ? 255 : 0;
+      }
+    }
+
     // create mask canvas
     const maskCanvas = document.createElement("canvas");
     maskCanvas.width = img.width;
@@ -103,8 +118,8 @@ export async function processImage(image: File) {
 
     // Draw mask data to mask canvas
     const maskPixelData = maskCtx.createImageData(img.width, img.height);
-    for (let i = 0; i < maskData.length; ++i) {
-      const value = maskData[i]; // grayscale value
+    for (let i = 0; i < cleanedMaskData.length; ++i) {
+      const value = cleanedMaskData[i]; // grayscale value
       maskPixelData.data[4 * i] = value;
       maskPixelData.data[4 * i + 1] = value;
       maskPixelData.data[4 * i + 2] = value;
@@ -138,12 +153,18 @@ export async function processImage(image: File) {
     // Draw original image output to canvas
     ctx.drawImage(img.toCanvas(), 0, 0);
 
-    // Update alpha channel
+    // Update alpha channel with cleaned mask data
     const pixelData = ctx.getImageData(0, 0, img.width, img.height);
-    for (let i = 0; i < maskData.length; ++i) {
-      pixelData.data[4 * i + 3] = maskData[i];
+    for (let i = 0; i < cleanedMaskData.length; ++i) {
+      pixelData.data[4 * i + 3] = cleanedMaskData[i];
     }
     ctx.putImageData(pixelData, 0, 0);
+
+    // Apply slight smoothing to reduce remaining artifacts
+    ctx.filter = 'blur(0.5px)';
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(canvas, 0, 0);
+    ctx.filter = 'none';
 
     // Convert canvas to blob
     const blob = await new Promise<Blob>((resolve, reject) =>
