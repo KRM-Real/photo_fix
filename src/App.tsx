@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import { initializeModel, processImage } from "./lib/process";
 import { enhanceImage, autoEnhanceImage, EnhancementOptions, defaultEnhancementOptions } from "./lib/enhance";
+import { MaskEditor, BrushSettings, defaultBrushSettings } from "./lib/maskEditor";
 
 export default function App() {
   const [image, setImage] = useState<{
@@ -14,13 +15,20 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [showEnhancementControls, setShowEnhancementControls] = useState(false);
+  const [showMaskEditor, setShowMaskEditor] = useState(false);
   const [enhancementOptions, setEnhancementOptions] = useState<EnhancementOptions>(defaultEnhancementOptions);
+  const [maskEditor, setMaskEditor] = useState<MaskEditor | null>(null);
+  const [brushSettings, setBrushSettings] = useState<BrushSettings>(defaultBrushSettings);
+  const [currentTool, setCurrentTool] = useState<'erase' | 'restore'>('erase');
+  const [showGuide, setShowGuide] = useState(true);
+  const [guideOpacity, setGuideOpacity] = useState(50);
   const [backgroundColor, setBackgroundColor] = useState<string>('#ffffff');
   const [backgroundImage, setBackgroundImage] = useState<File | null>(null);
   const [backgroundType, setBackgroundType] = useState<'color' | 'image'>('color');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backgroundImageInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const maskEditorCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Predefined colors similar to remove.bg
   const predefinedColors = [
@@ -55,6 +63,23 @@ export default function App() {
       setIsLoading(false);
     })();
   }, []);
+
+  // Initialize mask editor when modal opens
+  useEffect(() => {
+    if (showMaskEditor && image?.maskFile && maskEditorCanvasRef.current) {
+      initializeMaskEditor(image.maskFile, image.file);
+    }
+  }, [showMaskEditor, image?.maskFile]);
+
+  // Update mask editor tools when they change
+  useEffect(() => {
+    if (maskEditor) {
+      maskEditor.setTool(currentTool);
+      maskEditor.setBrushSettings(brushSettings);
+      maskEditor.setShowGuide(showGuide);
+      maskEditor.setGuideOpacity(guideOpacity / 100);
+    }
+  }, [maskEditor, currentTool, brushSettings, showGuide, guideOpacity]);
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
@@ -113,6 +138,154 @@ export default function App() {
     } finally {
       setIsEnhancing(false);
     }
+  };
+
+  const initializeMaskEditor = async (maskFile: File, originalFile: File) => {
+    if (!maskEditorCanvasRef.current) return;
+
+    try {
+      // Load mask image
+      const maskImg = new Image();
+      const originalImg = new Image();
+      
+      // Set crossOrigin to handle CORS if needed
+      maskImg.crossOrigin = 'anonymous';
+      originalImg.crossOrigin = 'anonymous';
+      
+      const maskPromise = new Promise<void>((resolve, reject) => {
+        maskImg.onload = () => resolve();
+        maskImg.onerror = reject;
+        maskImg.src = URL.createObjectURL(maskFile);
+      });
+      
+      const originalPromise = new Promise<void>((resolve, reject) => {
+        originalImg.onload = () => resolve();
+        originalImg.onerror = reject;
+        originalImg.src = URL.createObjectURL(originalFile);
+      });
+
+      await Promise.all([maskPromise, originalPromise]);
+
+      // Ensure both images have the same dimensions
+      const width = Math.min(maskImg.width, originalImg.width);
+      const height = Math.min(maskImg.height, originalImg.height);
+
+      // Create temporary canvases to get image data
+      const maskCanvas = document.createElement('canvas');
+      const originalCanvas = document.createElement('canvas');
+      
+      maskCanvas.width = width;
+      maskCanvas.height = height;
+      originalCanvas.width = width;
+      originalCanvas.height = height;
+
+      const maskCtx = maskCanvas.getContext('2d');
+      const originalCtx = originalCanvas.getContext('2d');
+
+      if (!maskCtx || !originalCtx) {
+        throw new Error('Could not get canvas contexts');
+      }
+
+      // Draw images to canvases
+      maskCtx.drawImage(maskImg, 0, 0, width, height);
+      originalCtx.drawImage(originalImg, 0, 0, width, height);
+
+      const maskImageData = maskCtx.getImageData(0, 0, width, height);
+      const originalImageData = originalCtx.getImageData(0, 0, width, height);
+
+      // Clean up blob URLs
+      URL.revokeObjectURL(maskImg.src);
+      URL.revokeObjectURL(originalImg.src);
+
+      // Initialize mask editor
+      const editor = new MaskEditor(maskEditorCanvasRef.current, maskImageData, originalImageData);
+      editor.setTool(currentTool);
+      editor.setBrushSettings(brushSettings);
+      editor.setShowGuide(showGuide);
+      editor.setGuideOpacity(guideOpacity / 100);
+      setMaskEditor(editor);
+
+    } catch (error) {
+      console.error('Error initializing mask editor:', error);
+      alert('Failed to load images for mask editing. Please try again.');
+    }
+  };
+
+  const handleMaskEditorMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!maskEditor || !maskEditorCanvasRef.current) return;
+    
+    const rect = maskEditorCanvasRef.current.getBoundingClientRect();
+    const scaleX = maskEditorCanvasRef.current.width / rect.width;
+    const scaleY = maskEditorCanvasRef.current.height / rect.height;
+    
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    
+    maskEditor.startDrawing({ x, y });
+  };
+
+  const handleMaskEditorMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!maskEditor || !maskEditorCanvasRef.current) return;
+    
+    const rect = maskEditorCanvasRef.current.getBoundingClientRect();
+    const scaleX = maskEditorCanvasRef.current.width / rect.width;
+    const scaleY = maskEditorCanvasRef.current.height / rect.height;
+    
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    
+    // Continue drawing if mouse is down (this will update display if drawing)
+    const wasDrawing = maskEditor.isDrawing;
+    maskEditor.continueDrawing({ x, y });
+    
+    // If not drawing, just show cursor preview
+    if (!wasDrawing) {
+      maskEditor.updateDisplay();
+      maskEditor.drawCursorPreview(x, y);
+    }
+  };
+
+  const handleMaskEditorMouseUp = () => {
+    if (!maskEditor) return;
+    maskEditor.stopDrawing();
+  };
+
+  const handleMaskEditorMouseLeave = () => {
+    if (!maskEditor) return;
+    maskEditor.stopDrawing();
+    maskEditor.updateDisplay(); // Clear cursor preview
+  };
+
+  const applyMaskEditorChanges = async () => {
+    if (!maskEditor || !image) return;
+
+    try {
+      const newMaskFile = await maskEditor.getMaskAsFile(image.file.name);
+      const newProcessedFile = await maskEditor.getProcessedImageAsFile(image.file.name);
+      
+      setImage({
+        ...image,
+        maskFile: newMaskFile,
+        processedFile: newProcessedFile
+      });
+      
+      setShowMaskEditor(false);
+    } catch (error) {
+      console.error('Error applying mask editor changes:', error);
+    }
+  };
+
+  const closeMaskEditor = () => {
+    if (maskEditor) {
+      maskEditor.cleanup();
+      setMaskEditor(null);
+    }
+    setShowMaskEditor(false);
+    // Reset tool state
+    setCurrentTool('erase');
+    setBrushSettings(defaultBrushSettings);
+    setShowGuide(true);
+    setGuideOpacity(50);
   };
 
   const createImageWithBackground = (imageFile: File, bgColor?: string, bgImage?: File): Promise<File> => {
@@ -227,7 +400,12 @@ export default function App() {
     setBackgroundImage(null);
     setBackgroundType('color');
     setShowEnhancementControls(false);
+    setShowMaskEditor(false);
     setEnhancementOptions(defaultEnhancementOptions);
+    if (maskEditor) {
+      maskEditor.cleanup();
+      setMaskEditor(null);
+    }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -438,6 +616,32 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                {image.processedFile && (
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => downloadImage(image.processedFile!, `background-removed-${Date.now()}.png`)}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-500 hover:bg-green-600 transition-colors"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Download
+                    </button>
+                    {image.maskFile && (
+                      <button
+                        onClick={() => {
+                          setShowMaskEditor(true);
+                        }}
+                        className="w-full inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                      >
+                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                        Edit Mask
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -746,6 +950,203 @@ export default function App() {
           </div>
         )}
       </main>
+      
+      {/* Mask Editor Modal */}
+      {showMaskEditor && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-lg max-w-6xl w-full my-4 shadow-2xl" style={{ maxHeight: 'calc(100vh - 2rem)' }}>
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 rounded-t-lg z-10">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold text-gray-900">Edit Mask - Fix Background Removal</h2>
+                <button
+                  onClick={closeMaskEditor}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              {/* Tool Controls */}
+              <div className="mt-4 space-y-4">
+                <div className="flex items-center space-x-4">
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => {
+                        setCurrentTool('erase');
+                        if (maskEditor) maskEditor.setTool('erase');
+                      }}
+                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                        currentTool === 'erase'
+                          ? 'bg-red-500 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      <svg className="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      Erase
+                    </button>
+                    <button
+                      onClick={() => {
+                        setCurrentTool('restore');
+                        if (maskEditor) maskEditor.setTool('restore');
+                      }}
+                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                        currentTool === 'restore'
+                          ? 'bg-green-500 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      <svg className="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Restore
+                    </button>
+                  </div>
+                  
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2">
+                      <label className="text-sm font-medium text-gray-700">Size:</label>
+                      <input
+                        type="range"
+                        min="5"
+                        max="100"
+                        value={brushSettings.size}
+                        onChange={(e) => {
+                          const newSettings = { ...brushSettings, size: parseInt(e.target.value) };
+                          setBrushSettings(newSettings);
+                          if (maskEditor) maskEditor.setBrushSettings(newSettings);
+                        }}
+                        className="w-20"
+                      />
+                      <span className="text-sm text-gray-600 w-8">{brushSettings.size}</span>
+                    </div>
+                    
+                    <div className="flex items-center space-x-2">
+                      <label className="text-sm font-medium text-gray-700">Hardness:</label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={brushSettings.hardness * 100}
+                        onChange={(e) => {
+                          const newSettings = { ...brushSettings, hardness: parseInt(e.target.value) / 100 };
+                          setBrushSettings(newSettings);
+                          if (maskEditor) maskEditor.setBrushSettings(newSettings);
+                        }}
+                        className="w-20"
+                      />
+                      <span className="text-sm text-gray-600 w-8">{Math.round(brushSettings.hardness * 100)}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Guide Controls */}
+                <div className="flex items-center justify-between p-4 bg-blue-50 rounded-lg">
+                  <div className="flex items-center space-x-4">
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={showGuide}
+                        onChange={(e) => {
+                          setShowGuide(e.target.checked);
+                          if (maskEditor) maskEditor.setShowGuide(e.target.checked);
+                        }}
+                        className="rounded border-gray-300 text-blue-500 focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">Show Original Guide</span>
+                    </label>
+                    
+                    {showGuide && (
+                      <div className="flex items-center space-x-2">
+                        <label className="text-sm font-medium text-gray-700">Opacity:</label>
+                        <input
+                          type="range"
+                          min="10"
+                          max="80"
+                          value={guideOpacity}
+                          onChange={(e) => {
+                            const opacity = parseInt(e.target.value);
+                            setGuideOpacity(opacity);
+                            if (maskEditor) maskEditor.setGuideOpacity(opacity / 100);
+                          }}
+                          className="w-20"
+                        />
+                        <span className="text-sm text-gray-600 w-8">{guideOpacity}%</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="text-xs text-blue-700">
+                    <p>💡 The guide shows the original image to help you see what to restore or erase</p>
+                  </div>
+                </div>
+                
+                <div className="text-sm text-gray-600">
+                  <p><strong>Erase:</strong> Remove parts that should be transparent (like incorrectly kept background)</p>
+                  <p><strong>Restore:</strong> Bring back parts that should be kept (like shoulders or other body parts)</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-4 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 200px)' }}>
+              <div className="flex justify-center mb-4">
+                <div className="relative inline-block">
+                  <canvas
+                    ref={maskEditorCanvasRef}
+                    onMouseDown={handleMaskEditorMouseDown}
+                    onMouseMove={handleMaskEditorMouseMove}
+                    onMouseUp={handleMaskEditorMouseUp}
+                    onMouseLeave={handleMaskEditorMouseLeave}
+                    className="border-2 border-gray-300 rounded cursor-crosshair shadow-lg block"
+                    style={{ 
+                      cursor: currentTool === 'erase' ? 'crosshair' : 'copy',
+                      maxWidth: '100%',
+                      height: 'auto',
+                      backgroundColor: '#f9fafb'
+                    }}
+                  />
+                  {!maskEditor && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent mx-auto mb-2"></div>
+                        <p className="text-gray-600">Loading mask editor...</p>
+                      </div>
+                    </div>
+                  )}
+                  {showGuide && maskEditor && (
+                    <div className="absolute top-2 left-2 bg-blue-500 text-white px-2 py-1 rounded text-xs font-medium shadow">
+                      Guide: {guideOpacity}%
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="text-center text-sm text-gray-600 mb-4">
+                <p>Click and drag to edit the mask. The <strong className="text-blue-500">original image guide</strong> helps you see what should be kept or removed.</p>
+                <p>Use <strong className="text-red-500">Erase</strong> to remove unwanted areas, <strong className="text-green-500">Restore</strong> to bring back removed parts.</p>
+              </div>
+              
+              <div className="mt-6 flex justify-center space-x-4 border-t pt-4">
+                <button
+                  onClick={closeMaskEditor}
+                  className="px-6 py-2 border border-gray-300 rounded-md shadow-sm text-base font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={applyMaskEditorChanges}
+                  className="px-6 py-2 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors"
+                >
+                  Apply Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Hidden canvas for background composition */}
       <canvas ref={canvasRef} className="hidden" />
