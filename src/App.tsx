@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { initializeModel, processImage } from "./lib/process";
 import { enhanceImage, autoEnhanceImage, EnhancementOptions, defaultEnhancementOptions } from "./lib/enhance";
 import { MaskEditor, BrushSettings, defaultBrushSettings } from "./lib/maskEditor";
+import { applyAttire, AttireOptions, defaultAttireOptions, getAttireTemplates, AttireTemplate } from "./lib/attire";
 
 export default function App() {
   const [image, setImage] = useState<{
@@ -10,13 +11,18 @@ export default function App() {
     maskFile?: File;
     processedFile?: File;
     enhancedFile?: File;
+    attireFile?: File;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [isChangingAttire, setIsChangingAttire] = useState(false);
   const [showEnhancementControls, setShowEnhancementControls] = useState(false);
   const [showMaskEditor, setShowMaskEditor] = useState(false);
+  const [showAttireEditor, setShowAttireEditor] = useState(false);
   const [enhancementOptions, setEnhancementOptions] = useState<EnhancementOptions>(defaultEnhancementOptions);
+  const [attireOptions, setAttireOptions] = useState<AttireOptions>(defaultAttireOptions);
+  const [selectedAttireTemplate, setSelectedAttireTemplate] = useState<AttireTemplate | null>(null);
   const [maskEditor, setMaskEditor] = useState<MaskEditor | null>(null);
   const [brushSettings, setBrushSettings] = useState<BrushSettings>(defaultBrushSettings);
   const [currentTool, setCurrentTool] = useState<'erase' | 'restore'>('erase');
@@ -137,6 +143,23 @@ export default function App() {
       console.error("Error auto-enhancing image:", error);
     } finally {
       setIsEnhancing(false);
+    }
+  };
+
+  const handleChangeAttire = async (targetFile: File) => {
+    if (!selectedAttireTemplate) return;
+    
+    setIsChangingAttire(true);
+    try {
+      const attireBlob = await applyAttire(targetFile, selectedAttireTemplate, attireOptions);
+      const attireFile = new File([attireBlob], 'attire.png', { type: 'image/png' });
+      if (image) {
+        setImage({ ...image, attireFile });
+      }
+    } catch (error) {
+      console.error("Error changing attire:", error);
+    } finally {
+      setIsChangingAttire(false);
     }
   };
 
@@ -577,6 +600,40 @@ export default function App() {
                 </div>
               )}
               
+              {/* Attire Changed */}
+              {image.attireFile && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Attire Changed</h3>
+                  <div className="bg-gray-100 rounded-lg overflow-hidden">
+                    <img 
+                      src={URL.createObjectURL(image.attireFile)} 
+                      alt="Attire Changed" 
+                      className="w-full h-auto"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => downloadImage(image.attireFile!, `attire-${Date.now()}.png`)}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-500 hover:bg-green-600 transition-colors"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Download Attire
+                    </button>
+                    {!image.processedFile && (
+                      <button
+                        onClick={() => handleClick({ ...image, file: image.attireFile! })}
+                        disabled={isProcessing}
+                        className="w-full inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Remove Background
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              
               {/* Background Removed */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900">
@@ -628,17 +685,30 @@ export default function App() {
                       Download
                     </button>
                     {image.maskFile && (
-                      <button
-                        onClick={() => {
-                          setShowMaskEditor(true);
-                        }}
-                        className="w-full inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                      >
-                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                        </svg>
-                        Edit Mask
-                      </button>
+                      <>
+                        <button
+                          onClick={() => {
+                            setShowMaskEditor(true);
+                          }}
+                          className="w-full inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                        >
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
+                          Edit Mask
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowAttireEditor(true);
+                          }}
+                          className="w-full inline-flex items-center justify-center px-4 py-2 border border-purple-300 rounded-md shadow-sm text-sm font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 transition-colors"
+                        >
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                          </svg>
+                          Change Attire
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
@@ -1141,6 +1211,114 @@ export default function App() {
                   className="px-6 py-2 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors"
                 >
                   Apply Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Attire Editor Modal */}
+      {showAttireEditor && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold text-gray-900">Change Attire</h2>
+                <button
+                  onClick={() => setShowAttireEditor(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              {/* Gender Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">Select Gender</h3>
+                <div className="flex space-x-4">
+                  <button
+                    onClick={() => setAttireOptions({...attireOptions, gender: 'male'})}
+                    className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+                      attireOptions.gender === 'male' 
+                        ? 'bg-purple-500 text-white' 
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Male
+                  </button>
+                  <button
+                    onClick={() => setAttireOptions({...attireOptions, gender: 'female'})}
+                    className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+                      attireOptions.gender === 'female' 
+                        ? 'bg-purple-500 text-white' 
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Female
+                  </button>
+                </div>
+              </div>
+              
+              {/* Attire Type Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">Select Attire Type</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  {getAttireTemplates(attireOptions.gender).map((template) => (
+                    <button
+                      key={template.id}
+                      onClick={() => setSelectedAttireTemplate(template)}
+                      className={`p-4 rounded-lg border-2 transition-colors ${
+                        selectedAttireTemplate?.id === template.id
+                          ? 'border-purple-500 bg-purple-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="w-full h-32 bg-gray-100 rounded-lg mb-2 flex items-center justify-center">
+                        {template.thumbnail ? (
+                          <img
+                            src={template.thumbnail}
+                            alt={template.name}
+                            className="w-full h-full object-cover rounded-lg"
+                          />
+                        ) : (
+                          <div className="text-gray-400 text-center">
+                            <svg className="w-8 h-8 mx-auto mb-2" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                            <span className="text-sm">{template.name}</span>
+                          </div>
+                        )}
+                      </div>
+                      <h4 className="font-medium text-gray-900">{template.name}</h4>
+                      <p className="text-sm text-gray-600">{template.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Apply Button */}
+              <div className="flex justify-center space-x-4 border-t pt-4">
+                <button
+                  onClick={() => setShowAttireEditor(false)}
+                  className="px-6 py-2 border border-gray-300 rounded-md shadow-sm text-base font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (selectedAttireTemplate && image) {
+                      const targetFile = image.enhancedFile || image.file;
+                      handleChangeAttire(targetFile);
+                      setShowAttireEditor(false);
+                    }
+                  }}
+                  disabled={!selectedAttireTemplate || isChangingAttire}
+                  className="px-6 py-2 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-purple-500 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isChangingAttire ? 'Changing...' : 'Apply Attire'}
                 </button>
               </div>
             </div>
