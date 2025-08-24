@@ -111,7 +111,7 @@ def smart_crop(img: Image.Image, target_size: Tuple[int,int]) -> Image.Image:
     return img.crop((x1, y1, x2, y2)).resize((Wt, Ht), Image.LANCZOS)
 
 def remove_bg(img: Image.Image, model_name: str = 'u2net') -> Image.Image:
-    """Enhanced background removal using rembg with better quality models and error handling"""
+    """Enhanced background removal using rembg with better quality models and advanced post-processing"""
     if img is None:
         return None
     
@@ -140,9 +140,8 @@ def remove_bg(img: Image.Image, model_name: str = 'u2net') -> Image.Image:
         # Convert result to PIL Image
         result = Image.open(io.BytesIO(cut)).convert("RGBA")
         
-        # Post-process for better quality
-        # Apply slight smoothing to reduce jagged edges
-        result = result.filter(ImageFilter.GaussianBlur(radius=0.5))
+        # Advanced post-processing for hair and edge refinement
+        result = refine_hair_edges(result, img)
         
         return result
         
@@ -152,33 +151,111 @@ def remove_bg(img: Image.Image, model_name: str = 'u2net') -> Image.Image:
         bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
         return Image.alpha_composite(bg, img.convert("RGBA"))
 
+def refine_hair_edges(cutout_img: Image.Image, original_img: Image.Image) -> Image.Image:
+    """Advanced hair edge refinement to remove outlines and improve fine details"""
+    try:
+        import cv2
+        import numpy as np
+        
+        # Convert images to numpy arrays
+        cutout_array = np.array(cutout_img)
+        original_array = np.array(original_img.convert("RGBA"))
+        
+        if len(cutout_array.shape) != 4:  # Ensure RGBA
+            return cutout_img
+            
+        # Extract alpha channel (mask)
+        alpha = cutout_array[:, :, 3].astype(np.float32) / 255.0
+        
+        # Create edge-preserving mask refinement
+        # 1. Remove small isolated pixels (noise)
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        alpha_clean = cv2.morphologyEx((alpha * 255).astype(np.uint8), cv2.MORPH_OPEN, kernel_small)
+        alpha_clean = alpha_clean.astype(np.float32) / 255.0
+        
+        # 2. Apply advanced hair-specific smoothing
+        alpha_smooth_raw = cv2.bilateralFilter((alpha_clean * 255).astype(np.uint8), 9, 75, 75)
+        alpha_smooth = create_smooth_hair_mask(alpha_smooth_raw).astype(np.float32) / 255.0
+        
+        # 3. Advanced edge feathering for natural hair transitions
+        # Create distance transform for soft edges
+        mask_binary = (alpha_smooth > 0.1).astype(np.uint8)
+        distance = cv2.distanceTransform(mask_binary, cv2.DIST_L2, 5)
+        
+        # Apply feathering only to edges (not solid areas)
+        edge_map = cv2.Canny((alpha_smooth * 255).astype(np.uint8), 30, 100)  # Lower thresholds for finer hair
+        edge_dilated = cv2.dilate(edge_map, np.ones((2, 2), np.uint8), iterations=1)  # Smaller dilation
+        
+        # Create soft feathering mask with variable radius
+        feather_radius = 2  # Smaller radius for finer control
+        feather_mask = cv2.GaussianBlur(edge_dilated.astype(np.float32), (feather_radius*2+1, feather_radius*2+1), feather_radius/3)
+        feather_mask = feather_mask / 255.0
+        
+        # Apply feathering to hair areas with reduced intensity
+        alpha_feathered = alpha_smooth.copy()
+        alpha_feathered = alpha_feathered * (1 - feather_mask * 0.2) + (alpha_smooth * 0.8) * feather_mask
+        
+        # 4. Remove color fringing/outline by intelligent edge blending
+        rgb_channels = cutout_array[:, :, :3].astype(np.float32)
+        original_rgb = original_array[:, :, :3].astype(np.float32)
+        
+        # Detect edge pixels with improved gradient detection
+        alpha_gradient_x = cv2.Sobel(alpha_feathered, cv2.CV_64F, 1, 0, ksize=3)
+        alpha_gradient_y = cv2.Sobel(alpha_feathered, cv2.CV_64F, 0, 1, ksize=3)
+        edge_strength = np.sqrt(alpha_gradient_x**2 + alpha_gradient_y**2)
+        
+        # More conservative blending to preserve hair color
+        blend_factor = np.clip(edge_strength * 0.3, 0, 0.6)  # Reduced blending intensity
+        blend_factor = blend_factor[:, :, np.newaxis]
+        
+        rgb_refined = rgb_channels * (1 - blend_factor) + original_rgb * blend_factor
+        
+        # 5. Final alpha channel refinement
+        # Ensure smooth transitions in semi-transparent areas
+        alpha_final = cv2.GaussianBlur(alpha_feathered, (3, 3), 0.5)
+        
+        # Combine refined RGB with refined alpha
+        result_array = np.zeros_like(cutout_array, dtype=np.uint8)
+        result_array[:, :, :3] = np.clip(rgb_refined, 0, 255).astype(np.uint8)
+        result_array[:, :, 3] = np.clip(alpha_final * 255, 0, 255).astype(np.uint8)
+        
+        return Image.fromarray(result_array, 'RGBA')
+        
+    except Exception as e:
+        print(f"Hair edge refinement failed, using original cutout: {e}")
+        return cutout_img
+
 def remove_bg_only(img: Image.Image, model_quality: str = "Standard") -> Image.Image:
-    """Enhanced background removal without cropping - supports multiple quality levels"""
+    """Enhanced background removal without cropping - supports multiple quality levels with hair-optimized models"""
     if img is None:
         return None
     
-    # Enhanced model mapping with better models
+    # Enhanced model mapping with better models for hair detection
     model_map = {
         "Fast": "u2net",
         "Standard": "u2net_human_seg", 
         "High Quality": "u2netp",
         "Portrait": "silueta",
-        "Product": "isnet-general-use"
+        "Hair Focus": "isnet-general-use",  # Best for fine hair details
+        "Product": "u2net_cloth_seg"
     }
     
     model = model_map.get(model_quality, "u2net_human_seg")
     return remove_bg(img, model)
 
 def remove_bg_with_postprocess(img: Image.Image, model_quality: str = "Standard", enhance_edges: bool = True) -> Image.Image:
-    """Advanced background removal with post-processing for better quality"""
+    """Advanced background removal with post-processing for better quality and hair handling"""
     if img is None:
         return None
     
-    # First pass: Remove background
-    result = remove_bg_only(img, model_quality)
+    # First pass: Remove background with hair-optimized model
+    if "hair" in model_quality.lower() or model_quality == "Hair Focus":
+        result = remove_bg_only(img, "Hair Focus")
+    else:
+        result = remove_bg_only(img, model_quality)
     
     if enhance_edges and result is not None:
-        # Enhance edges for cleaner cutout
+        # Apply additional edge enhancement
         try:
             import cv2
             import numpy as np
@@ -190,13 +267,16 @@ def remove_bg_with_postprocess(img: Image.Image, model_quality: str = "Standard"
                 # Extract alpha channel
                 alpha = img_array[:, :, 3]
                 
-                # Apply morphological operations to clean up the mask
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                # Apply morphological operations to clean up the mask while preserving hair
+                # Use smaller kernel for hair preservation
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
                 alpha = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel)
-                alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, kernel)
                 
-                # Apply Gaussian blur for smoother edges
-                alpha = cv2.GaussianBlur(alpha, (3, 3), 0)
+                # Apply gentle Gaussian blur for smoother edges without losing hair detail
+                alpha = cv2.GaussianBlur(alpha, (2, 2), 0.5)
+                
+                # Enhance edge contrast for better definition
+                alpha = cv2.convertScaleAbs(alpha, alpha=1.2, beta=0)
                 
                 # Update alpha channel
                 img_array[:, :, 3] = alpha
@@ -204,11 +284,38 @@ def remove_bg_with_postprocess(img: Image.Image, model_quality: str = "Standard"
                 # Convert back to PIL
                 result = Image.fromarray(img_array, 'RGBA')
                 
+                # Apply final hair-specific refinement
+                result = refine_hair_edges(result, img)
+                
         except Exception as e:
             print(f"Edge enhancement failed, using original result: {e}")
     
     return result
-    return remove_bg(img, model)
+
+def create_smooth_hair_mask(alpha_channel: np.ndarray) -> np.ndarray:
+    """Create ultra-smooth hair mask with anti-aliasing for natural hair edges"""
+    try:
+        import cv2
+        
+        # Convert to float for better precision
+        alpha_float = alpha_channel.astype(np.float32) / 255.0
+        
+        # Multi-scale smoothing for different hair thickness
+        smooth_fine = cv2.GaussianBlur(alpha_float, (3, 3), 0.5)  # Fine hair
+        smooth_medium = cv2.GaussianBlur(alpha_float, (5, 5), 1.0)  # Medium hair
+        smooth_coarse = cv2.GaussianBlur(alpha_float, (7, 7), 1.5)  # Coarse hair
+        
+        # Combine multi-scale results
+        alpha_combined = (smooth_fine * 0.5 + smooth_medium * 0.3 + smooth_coarse * 0.2)
+        
+        # Apply anti-aliasing
+        alpha_aa = cv2.bilateralFilter((alpha_combined * 255).astype(np.uint8), 9, 50, 50)
+        
+        return alpha_aa
+        
+    except Exception as e:
+        print(f"Hair mask smoothing failed: {e}")
+        return alpha_channel
 
 def remove_blemishes_basic(img: Image.Image, intensity: float = 0.5) -> Image.Image:
     """Basic blemish removal using image processing techniques"""
@@ -791,10 +898,10 @@ with gr.Blocks(title="PhotoFix - Professional Photo Editor", css=custom_css, the
                 
                 with gr.Accordion("⚙️ Enhanced Background Removal Settings", open=True):
                     bg_quality = gr.Dropdown(
-                        choices=["Fast", "Standard", "High Quality", "Portrait", "Product"],
+                        choices=["Fast", "Standard", "High Quality", "Portrait", "Hair Focus", "Product"],
                         value="Standard",
                         label="🎯 Removal Quality",
-                        info="Standard: Best for people | Product: Best for objects | High Quality: Slower but better"
+                        info="Standard: Best for people | Hair Focus: Best for fine hair details | Product: Best for objects | High Quality: Slower but better"
                     )
                     
                     enhance_edges = gr.Checkbox(
@@ -813,6 +920,17 @@ with gr.Blocks(title="PhotoFix - Professional Photo Editor", css=custom_css, the
                         label="📏 Crop Size (only if cropping enabled)",
                         visible=False
                     )
+                    
+                    gr.HTML("""
+                    <div style="background: #f0f8ff; padding: 10px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #2196F3;">
+                        <h4 style="margin: 0 0 8px 0; color: #1976D2;">💡 Hair & Edge Tips:</h4>
+                        <ul style="margin: 0; padding-left: 20px; color: #333;">
+                            <li><strong>Hair Focus:</strong> Use for photos with fine hair details or complex hair styles</li>
+                            <li><strong>Enable Edge Enhancement:</strong> Automatically removes outlines and smooths edges</li>
+                            <li><strong>Best Results:</strong> Use high-resolution photos with good lighting</li>
+                        </ul>
+                    </div>
+                    """)
                 
                 btn_remove_bg = gr.Button("🎯 Remove Background", variant="primary", size="lg")
             
