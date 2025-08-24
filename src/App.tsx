@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { initializeModel, processImage } from "./lib/process";
+import { enhanceImage, autoEnhanceImage, EnhancementOptions, defaultEnhancementOptions } from "./lib/enhance";
 
 export default function App() {
   const [image, setImage] = useState<{
@@ -7,9 +8,13 @@ export default function App() {
     file: File;
     maskFile?: File;
     processedFile?: File;
+    enhancedFile?: File;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isEnhancing, setIsEnhancing] = useState(false);
+  const [showEnhancementControls, setShowEnhancementControls] = useState(false);
+  const [enhancementOptions, setEnhancementOptions] = useState<EnhancementOptions>(defaultEnhancementOptions);
   const [backgroundColor, setBackgroundColor] = useState<string>('#ffffff');
   const [backgroundImage, setBackgroundImage] = useState<File | null>(null);
   const [backgroundType, setBackgroundType] = useState<'color' | 'image'>('color');
@@ -66,6 +71,7 @@ export default function App() {
     id: number;
     file: File;
     processedFile?: File;
+    enhancedFile?: File;
   }) => {
     setIsProcessing(true);
     try {
@@ -78,6 +84,34 @@ export default function App() {
       console.error("Error processing image:", error);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleEnhanceImage = async (targetFile: File) => {
+    setIsEnhancing(true);
+    try {
+      const enhancedFile = await enhanceImage(targetFile, enhancementOptions);
+      if (image) {
+        setImage({ ...image, enhancedFile });
+      }
+    } catch (error) {
+      console.error("Error enhancing image:", error);
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+
+  const handleAutoEnhance = async (targetFile: File) => {
+    setIsEnhancing(true);
+    try {
+      const enhancedFile = await autoEnhanceImage(targetFile);
+      if (image) {
+        setImage({ ...image, enhancedFile });
+      }
+    } catch (error) {
+      console.error("Error auto-enhancing image:", error);
+    } finally {
+      setIsEnhancing(false);
     }
   };
 
@@ -192,6 +226,8 @@ export default function App() {
     setBackgroundColor('#ffffff');
     setBackgroundImage(null);
     setBackgroundType('color');
+    setShowEnhancementControls(false);
+    setEnhancementOptions(defaultEnhancementOptions);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -245,10 +281,10 @@ export default function App() {
           <div className="text-center">
             <div className="mb-8">
               <h2 className="text-4xl font-bold text-gray-900 mb-4">
-                Remove Image Background
+                Remove Background & Enhance Images
               </h2>
               <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-                100% automatically – in 5 seconds – without a single click
+                100% automatically remove backgrounds and enhance image quality – remove blemishes, reduce noise, and improve clarity in seconds
               </p>
             </div>
             
@@ -286,7 +322,7 @@ export default function App() {
           /* Processing Section */
           <div className="space-y-8">
             {/* Image Display */}
-            <div className="grid md:grid-cols-2 gap-8">
+            <div className="grid md:grid-cols-3 gap-6">
               {/* Original */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900">Original</h3>
@@ -297,9 +333,73 @@ export default function App() {
                     className="w-full h-auto"
                   />
                 </div>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => handleAutoEnhance(image.file)}
+                    disabled={isEnhancing}
+                    className="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-purple-500 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isEnhancing ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                        Enhancing...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Auto Enhance
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setShowEnhancementControls(!showEnhancementControls)}
+                    className="w-full inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                  >
+                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4" />
+                    </svg>
+                    Manual Enhance
+                  </button>
+                </div>
               </div>
               
-              {/* Result */}
+              {/* Enhanced */}
+              {image.enhancedFile && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Enhanced</h3>
+                  <div className="bg-gray-100 rounded-lg overflow-hidden">
+                    <img 
+                      src={URL.createObjectURL(image.enhancedFile)} 
+                      alt="Enhanced" 
+                      className="w-full h-auto"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => downloadImage(image.enhancedFile!, `enhanced-${Date.now()}.png`)}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-500 hover:bg-green-600 transition-colors"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Download Enhanced
+                    </button>
+                    {!image.processedFile && (
+                      <button
+                        onClick={() => handleClick({ ...image, file: image.enhancedFile! })}
+                        disabled={isProcessing}
+                        className="w-full inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Remove Background
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Background Removed */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900">
                   {image.processedFile ? 'Background removed' : 'Preview'}
@@ -341,6 +441,117 @@ export default function App() {
               </div>
             </div>
 
+            {/* Enhancement Controls */}
+            {showEnhancementControls && (
+              <div className="bg-white border border-gray-200 rounded-lg p-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Manual Enhancement Controls</h3>
+                
+                <div className="grid md:grid-cols-2 gap-6">
+                  {/* Basic Enhancements */}
+                  <div className="space-y-4">
+                    <h4 className="font-medium text-gray-800">Basic Enhancements</h4>
+                    
+                    <div className="space-y-3">
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={enhancementOptions.blemishRemoval}
+                          onChange={(e) => setEnhancementOptions({...enhancementOptions, blemishRemoval: e.target.checked})}
+                          className="rounded border-gray-300 text-purple-500 focus:ring-purple-500"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Remove Blemishes</span>
+                      </label>
+                      
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={enhancementOptions.noiseReduction}
+                          onChange={(e) => setEnhancementOptions({...enhancementOptions, noiseReduction: e.target.checked})}
+                          className="rounded border-gray-300 text-purple-500 focus:ring-purple-500"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Reduce Noise/Grain</span>
+                      </label>
+                      
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={enhancementOptions.sharpen}
+                          onChange={(e) => setEnhancementOptions({...enhancementOptions, sharpen: e.target.checked})}
+                          className="rounded border-gray-300 text-purple-500 focus:ring-purple-500"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Sharpen Image</span>
+                      </label>
+                    </div>
+                  </div>
+                  
+                  {/* Advanced Adjustments */}
+                  <div className="space-y-4">
+                    <h4 className="font-medium text-gray-800">Advanced Adjustments</h4>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Brightness: {enhancementOptions.brightnessAdjust}
+                        </label>
+                        <input
+                          type="range"
+                          min="-100"
+                          max="100"
+                          value={enhancementOptions.brightnessAdjust}
+                          onChange={(e) => setEnhancementOptions({...enhancementOptions, brightnessAdjust: parseInt(e.target.value)})}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Contrast: {enhancementOptions.contrastAdjust}
+                        </label>
+                        <input
+                          type="range"
+                          min="-100"
+                          max="100"
+                          value={enhancementOptions.contrastAdjust}
+                          onChange={(e) => setEnhancementOptions({...enhancementOptions, contrastAdjust: parseInt(e.target.value)})}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Saturation: {enhancementOptions.saturationAdjust}
+                        </label>
+                        <input
+                          type="range"
+                          min="-100"
+                          max="100"
+                          value={enhancementOptions.saturationAdjust}
+                          onChange={(e) => setEnhancementOptions({...enhancementOptions, saturationAdjust: parseInt(e.target.value)})}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="mt-6 flex justify-center space-x-4">
+                  <button
+                    onClick={() => setEnhancementOptions(defaultEnhancementOptions)}
+                    className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                  >
+                    Reset to Default
+                  </button>
+                  <button
+                    onClick={() => handleEnhanceImage(image.file)}
+                    disabled={isEnhancing}
+                    className="px-6 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-purple-500 hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isEnhancing ? 'Enhancing...' : 'Apply Enhancement'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="flex flex-wrap justify-center gap-4">
               {!image.processedFile ? (
@@ -355,7 +566,13 @@ export default function App() {
                       Processing...
                     </>
                   ) : (
-                    'Remove Background'
+                    <>
+                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                      Remove Background
+                    </>
                   )}
                 </button>
               ) : (
@@ -364,6 +581,9 @@ export default function App() {
                     onClick={() => downloadImage(image.processedFile!, `photofix-${Date.now()}.png`)}
                     className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-green-500 hover:bg-green-600 transition-colors"
                   >
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
                     Download
                   </button>
                   {(backgroundColor !== 'transparent' || backgroundImage) && (
@@ -371,7 +591,31 @@ export default function App() {
                       onClick={downloadWithBackground}
                       className="inline-flex items-center px-6 py-3 border border-gray-300 rounded-md shadow-sm text-base font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
                     >
+                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
                       Download with background
+                    </button>
+                  )}
+                  {image.enhancedFile && (
+                    <button
+                      onClick={() => handleEnhanceImage(image.processedFile!)}
+                      disabled={isEnhancing}
+                      className="inline-flex items-center px-6 py-3 border border-purple-300 rounded-md shadow-sm text-base font-medium text-purple-700 bg-white hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {isEnhancing ? (
+                        <>
+                          <div className="animate-spin rounded-full h-5 w-5 border-2 border-purple-500 border-t-transparent mr-2"></div>
+                          Enhancing...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                          </svg>
+                          Enhance Result
+                        </>
+                      )}
                     </button>
                   )}
                 </div>
